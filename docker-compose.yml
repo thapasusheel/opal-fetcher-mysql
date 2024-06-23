@@ -1,0 +1,53 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  example_db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      - MYSQL_DATABASE=test
+      - MYSQL_USER=test
+      - MYSQL_PASSWORD=mysql
+      - MYSQL_ROOT_PASSWORD=mysql
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/01_create_tables.sql:/docker-entrypoint-initdb.d/01_create_tables.sql
+      - ./sql/02_fill_tables.sql:/docker-entrypoint-initdb.d/02_fill_tables.sql
+
+  opal_server:
+    image: permitio/opal-server:latest
+    environment:
+      - OPAL_BROADCAST_URI=redis://redis:6379
+      - UVICORN_NUM_WORKERS=4  # Removed space after '=' and set value directly
+      - OPAL_POLICY_REPO_URL=https://github.com/permitio/opal-example-policy-repo
+      - OPAL_POLICY_REPO_POLLING_INTERVAL=30
+      - OPAL_DATA_CONFIG_SOURCES={"config":{"entries":[{"url":"mysql://root:mysql@example_db:3306/test?password=mysql","config":{"fetcher":"MySQLFetchProvider","query":"SELECT * FROM cities","connection_params":{"host":"example_db","user":"root","port":3306,"db":"test","password":"mysql"}},"topics":["mysql"],"dst_path":"countries"}]}}
+    ports:
+      - "7002:7002"
+    depends_on:
+      - redis
+
+  opal_client:
+    build:
+      context: .
+    environment:
+      OPAL_SERVER_URL: http://opal_server:7002
+      OPAL_FETCH_PROVIDER_MODULES: opal_common.fetcher.providers,opal_fetcher_mysql.provider
+      OPAL_INLINE_OPA_LOG_FORMAT: http
+    ports:
+      - "7766:7000"
+      - "8181:8181"
+    depends_on:
+      - opal_server
+      - example_db
+    command: sh -c "./wait-for.sh opal_server:7002 example_db:3306 --timeout=20 -- ./start.sh"
+
+volumes:
+  mysql_data:
